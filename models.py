@@ -9,4 +9,3 @@ class Task(Base):
     title = Column(String(255), nullable=False)  # VARCHAR(255) NOT NULL
     description = Column(Text)  # TEXT
     status = Column(String(50), default="pending")  # VARCHAR(50) DEFAULT 'pending'
-    created_at = Column(TIMESTAMP, server_default=func.now())  # TIMESTAMP DEFAULT now()

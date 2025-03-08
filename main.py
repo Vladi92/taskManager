@@ -1,7 +1,7 @@
-from typing import List
+from datetime import datetime
+from typing import List, Optional
 
-from fastapi import FastAPI,HTTPException
-from fastapi.params import Depends
+from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -10,73 +10,107 @@ from models import Base, Task
 
 app = FastAPI()
 
-class TaskSchema(BaseModel):
-    title : str
-    description : str
-    status : str
-
-
+# ✅ Ensure DB tables are created on startup
 Base.metadata.create_all(bind=engine)
 
+
+# ✅ Pydantic Schemas
+class TaskCreateSchema(BaseModel):
+    title: str
+    description: str
+    status: Optional[str] = None  # Optional, uses default in DB
+
+
+class TaskUpdateSchema(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    status: Optional[str] = None
+
+
+class TaskResponseSchema(BaseModel):
+    id: int
+    title: str
+    description: str
+    status: str
+
+    model_config = {
+        "from_attributes": True }
+
+
+
+# ✅ Dependency for Database Session
 def get_db():
-    db = None
+    db = SessionLocal()
     try:
-        db = SessionLocal()
         yield db
     finally:
         db.close()
 
+
+# ✅ Root Endpoint
 @app.get("/")
 def root():
     return {"message": "Welcome to Task Manager API"}
 
-@app.post("/tasks")
-def add_task(task :  TaskSchema, db : Session = Depends(get_db)):
 
-    new_task = Task(title = task.title , description = task.description)
+# ✅ Create a Task
+@app.post("/tasks", response_model=TaskResponseSchema)
+def add_task(task: TaskCreateSchema, db: Session = Depends(get_db)):
+    new_task = Task(
+        title=task.title,
+        description=task.description,
+        status=task.status if task.status is not None else "pending"  # ✅ Always set status
+    )
     db.add(new_task)
     db.commit()
     db.refresh(new_task)
-    return new_task
+    return new_task  # ✅ No need to manually format `created_at` due to `json_encoders`
 
 
-@app.get("/tasks",response_model=List[TaskSchema])
-def get_tasks(db : Session = Depends(get_db)):
+# ✅ Get All Tasks
+@app.get("/tasks", response_model=List[TaskResponseSchema])
+def get_tasks(db: Session = Depends(get_db)):
     tasks = db.query(Task).all()
     if not tasks:
-        raise HTTPException(status_code = 404 , detail="There are not tasks in the list")
-    return tasks
+        raise HTTPException(status_code=404, detail="There are no tasks in the list")
 
-@app.get("/tasks/{task_id}",response_model = TaskSchema)
-def get_specific_task(task_id : int, db : Session = Depends(get_db)):
+    return tasks  # ✅ FastAPI will auto-convert using `model_validate`
+
+
+# ✅ Get a Specific Task
+@app.get("/tasks/{task_id}", response_model=TaskResponseSchema)
+def get_specific_task(task_id: int, db: Session = Depends(get_db)):
     task = db.query(Task).filter(Task.id == task_id).first()
-    if task:
-        return task
-    else:
-        raise HTTPException(status_code=404,detail=f"Item {task_id} not found!" )
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Task {task_id} not found!")
 
-@app.put("/tasks/{task_id}", response_model=TaskSchema)
-def update_task(task_id : int , updated_task : TaskSchema, db: Session = Depends(get_db)):
+    return task  # ✅ Will automatically format `created_at`
+
+
+# ✅ Update a Task
+@app.put("/tasks/{task_id}", response_model=TaskResponseSchema)
+def update_task(task_id: int, updated_task: TaskUpdateSchema, db: Session = Depends(get_db)):
     task = db.query(Task).filter(Task.id == task_id).first()
-    if task:
-        task.title = updated_task.title
-        task.description = updated_task.description
-        task.status = updated_task.status
-        db.commit()
-        return task
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Task {task_id} not found!")
 
-    else:
-        raise HTTPException(status_code=404, detail=f"Item {task_id} not found!")
+    # ✅ Update fields only if provided
+    update_data = updated_task.dict(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(task, key, value)
 
+    db.commit()
+    db.refresh(task)
+    return task
+
+
+# ✅ Delete a Task
 @app.delete("/tasks/{task_id}")
 def delete_task(task_id: int, db: Session = Depends(get_db)):
     task = db.query(Task).filter(Task.id == task_id).first()
-    if task:
-        db.delete(task)
-        db.commit()
-        return {"message": f"Task {task_id} deleted successfully"}
-    else:
+    if not task:
         raise HTTPException(status_code=404, detail=f"Task {task_id} not found!")
 
-
-
+    db.delete(task)
+    db.commit()
+    return {"message": f"Task {task_id} deleted successfully"}
